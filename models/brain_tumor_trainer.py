@@ -5,13 +5,13 @@ from pathlib import Path
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from models.model import UNet
-from train_utils import CombinedLoss
+from .train_utils  import CombinedLoss
 
 
 class Trainer:
     def __init__(self, config, train_loader, val_loader, save_dir):
         self.config = config
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') # Use cuda GPU if available
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.save_dir = Path(save_dir)

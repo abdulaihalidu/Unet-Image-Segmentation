@@ -77,6 +77,6 @@ class UNet(nn.Module):
         enc_ftrs = self.encoder(x)
         out = self.decoder(enc_ftrs[::-1][0], enc_ftrs[::-1][1:])
         out = self.head(out)
-        if self.retain_dim:
+        if self.retain_dim: # Interpolate to maintain image dim (same as the input img)
             out = F.interpolate(out, self.out_sz)
         return out

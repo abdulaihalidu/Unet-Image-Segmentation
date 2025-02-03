@@ -105,7 +105,7 @@ class Trainer:
                     logit = model(image)
                     loss = criterion(logit, label)
                     
-                    if split == 'train':
+                    if split == 'train': # We only do back-prop on the train set
                         optimizer.zero_grad()
                         loss.backward()
                         

@@ -10,6 +10,7 @@ class UNet(nn.Module):
                  num_class=1, padding="same", dropout_rate=0.2, retain_dim=False, out_sz=(512, 512)):
         super().__init__()
 
+        # A basic convolutional block with two Conv2d layers, BatchNorm, and ReLU activation
         class Block(nn.Module):
             def __init__(self, in_ch, out_ch, padding):
                 super().__init__()
@@ -25,24 +26,26 @@ class UNet(nn.Module):
             def forward(self, x):
                 return self.block(x)
 
+        # Encoder: series of convolutional blocks with max pooling and dropout
         class Encoder(nn.Module):
             def __init__(self, chs, padding, dropout_rate=0.2):
                 super().__init__()
                 self.enc_blocks = nn.ModuleList(
-                    [Block(chs[i], chs[i+1], padding) for i in range(len(chs)-1)])
-                self.pool = nn.MaxPool2d(2)
-                # Add dropout layer
-                self.dropout = nn.Dropout2d(p=dropout_rate)
+                    [Block(chs[i], chs[i+1], padding) for i in range(len(chs)-1)]
+                )
+                self.pool = nn.MaxPool2d(2)  # Downsampling by a factor of 2
+                self.dropout = nn.Dropout2d(p=dropout_rate)  # Dropout for regularization
 
             def forward(self, x):
-                ftrs = []
+                ftrs = []  # Store feature maps for skip connections
                 for block in self.enc_blocks:
                     x = block(x)
-                    ftrs.append(x)
-                    x = self.dropout(x)
-                    x = self.pool(x) 
-                return ftrs
+                    ftrs.append(x)  # Store feature map before downsampling
+                    x = self.dropout(x)  # Apply dropout
+                    x = self.pool(x)  # Downsample
+                return ftrs  # Return all feature maps for later use in skip connections
 
+        # Decoder: Upsampling using transposed convolutions and concatenation with encoder features
         class Decoder(nn.Module):
             def __init__(self, chs, padding):
                 super().__init__()
@@ -55,28 +58,35 @@ class UNet(nn.Module):
 
             def forward(self, x, encoder_features):
                 for i in range(len(self.dec_blocks)):
-                    x = self.upconvs[i](x)
-                    enc_ftrs = self.crop(encoder_features[i], x)
-                    x = torch.cat([x, enc_ftrs], dim=1)
-                    x = self.dec_blocks[i](x)
+                    x = self.upconvs[i](x)  # Upsample using transposed convolution
+                    enc_ftrs = self.crop(encoder_features[i], x)  # Crop encoder feature to match upsampled size
+                    x = torch.cat([x, enc_ftrs], dim=1)  # Concatenate with encoder features (skip connection)
+                    x = self.dec_blocks[i](x)  # Apply convolutional block
                 return x
 
             def crop(self, enc_ftrs, x):
+                """ Crop the encoder features to match the size of the upsampled features. """
                 _, _, H, W = x.shape
                 enc_ftrs = torchvision.transforms.CenterCrop([H, W])(enc_ftrs)
                 return enc_ftrs
-        # We add (instanstiate) all the pieces together to form the architecture of our model
+
+        # Instantiate Encoder and Decoder components
         self.encoder = Encoder(encoder_channels, padding, dropout_rate)
         self.decoder = Decoder(decoder_channels, padding)
-        # Final layer
+
+        # Final 1x1 convolution to output segmentation mask with the desired number of classes
         self.head = nn.Conv2d(in_channels=decoder_channels[-1], out_channels=num_class, kernel_size=1)
+
+        # Option to retain original image dimensions
         self.retain_dim = retain_dim
         self.out_sz = out_sz
 
     def forward(self, x):
-        enc_ftrs = self.encoder(x)
-        out = self.decoder(enc_ftrs[::-1][0], enc_ftrs[::-1][1:])
-        out = self.head(out)
-        if self.retain_dim: # Interpolate to maintain image dim (same as the input img)
+        enc_ftrs = self.encoder(x)  # Encode input image
+        out = self.decoder(enc_ftrs[::-1][0], enc_ftrs[::-1][1:])  # Decode using reversed feature maps
+        out = self.head(out)  # Final convolution to get segmentation map
+
+        # Resize output to match input dimensions if retain_dim is True
+        if self.retain_dim:
             out = F.interpolate(out, self.out_sz)
         return out

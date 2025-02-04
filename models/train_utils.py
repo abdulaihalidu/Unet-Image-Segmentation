@@ -4,33 +4,33 @@ import torch.nn as nn
 import numpy as np
 from pathlib import Path
 from PIL import Image
-from torch.utils.data import DataLoader
-from torchvision.utils import save_image
 import matplotlib.pyplot as plt
 from tqdm import tqdm 
 
 from models.model import UNet
 
 
+# Loss function combining Binary Cross Entropy (BCE) and Dice Loss
 class CombinedLoss(nn.Module):
     def __init__(self, bce_weight=0.5, dice_weight=0.5):
         super().__init__()
         self.bce_weight = bce_weight
         self.dice_weight = dice_weight
-        self.bce_criterion = nn.BCEWithLogitsLoss()
-        
+        self.bce_criterion = nn.BCEWithLogitsLoss()  # BCE Loss with logits
+
     def forward(self, inputs, targets):
         bce_loss = self.bce_criterion(inputs, targets)
         
-        # Dice loss
-        inputs_sigmoid = torch.sigmoid(inputs)
+        # Dice loss computation
+        inputs_sigmoid = torch.sigmoid(inputs)  # Apply sigmoid to logits
         intersection = (inputs_sigmoid * targets).sum()
         dice_loss = 1 - (2. * intersection + 1e-7) / (
             inputs_sigmoid.sum() + targets.sum() + 1e-7
         )
         
-        # Combined loss
+        # Return weighted combination of BCE and Dice loss
         return self.bce_weight * bce_loss + self.dice_weight * dice_loss
+
 
 class Trainer:
     def __init__(self, config):
@@ -40,9 +40,9 @@ class Trainer:
         self.val_losses = []
         self.train_accuracies = []
         self.val_accuracies = []
-        
+    
     def compute_statistics(self, dataset_path='dataset/train'):
-        """Compute mean and std dev of the training set"""
+        """Compute mean and standard deviation of the training dataset"""
         sum_pixels = 0
         sum_squared_pixels = 0
         num_pixels = 0 
@@ -62,18 +62,18 @@ class Trainer:
         return mean, std
 
     def calculate_metrics(self, logit, target, threshold=0.5):
-        """Calculate multiple metrics for binary segmentation"""
+        """Calculate segmentation metrics: Accuracy, IoU, and Dice coefficient"""
         preds = (logit > threshold).float()
-        
-        # Accuracy
+
+        # Compute Accuracy
         acc = (preds == target).float().mean().item() * 100
         
-        # IoU (Intersection over Union)
+        # Compute IoU (Intersection over Union)
         intersection = (preds * target).sum()
         union = preds.sum() + target.sum() - intersection
         iou = (intersection + 1e-7) / (union + 1e-7)
         
-        # Dice coefficient
+        # Compute Dice coefficient
         dice = (2 * intersection + 1e-7) / (preds.sum() + target.sum() + 1e-7)
         
         return {
@@ -84,7 +84,7 @@ class Trainer:
 
     def step(self, data_loader, split, epoch, model, criterion, optimizer=None, 
              batch_size=1, max_grad_norm=1.0):
-        """Training/evaluation step with metrics tracking"""
+        """Single training/evaluation step for one epoch"""
         model.train() if split == 'train' else model.eval()
         
         metrics_dict = {
@@ -102,27 +102,30 @@ class Trainer:
                 image, label = image.to(self.device), label.to(self.device)
                 
                 with torch.set_grad_enabled(split == 'train'):
-                    logit = model(image)
+                    logit = model(image)  # Forward pass
                     loss = criterion(logit, label)
                     
-                    if split == 'train': # We only do back-prop on the train set
+                    if split == 'train':  # Backpropagation for training
                         optimizer.zero_grad()
                         loss.backward()
                         
-                        if max_grad_norm > 0:
+                        if max_grad_norm > 0:  # Gradient clipping
                             nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
                         
                         optimizer.step()
                 
+                # Compute batch metrics
                 batch_metrics = self.calculate_metrics(logit, label)
                 batch_size = image.size(0)
                 
+                # Accumulate loss and metrics
                 metrics_dict['loss'] += loss.item() * batch_size
                 metrics_dict['accuracy'] += batch_metrics['accuracy'] * batch_size
                 metrics_dict['iou'] += batch_metrics['iou'] * batch_size
                 metrics_dict['dice'] += batch_metrics['dice'] * batch_size
                 n_samples += batch_size
                 
+                # Update progress bar
                 pbar.set_postfix({
                     'loss': metrics_dict['loss'] / n_samples,
                     'acc': metrics_dict['accuracy'] / n_samples,
@@ -131,17 +134,18 @@ class Trainer:
                 
             except RuntimeError as e:
                 print(f"Error in batch {batch_idx}: {str(e)}")
-                if "out of memory" in str(e):
-                    if hasattr(torch.cuda, 'empty_cache'):
-                        torch.cuda.empty_cache()
+                if "out of memory" in str(e) and hasattr(torch.cuda, 'empty_cache'):
+                    torch.cuda.empty_cache()
                 continue
         
+        # Normalize metrics by number of samples
         for key in metrics_dict:
             metrics_dict[key] /= n_samples
         
         return metrics_dict
 
     def initialize_model(self):
+        """Initialize U-Net model with weight initialization"""
         model = UNet(
             retain_dim=True,
             out_sz=self.config.get('out_size', (512, 512))
@@ -157,6 +161,7 @@ class Trainer:
         return model.to(self.device)
 
     def get_optimizer(self, model):
+        """Create Adam optimizer and learning rate scheduler"""
         optimizer = torch.optim.Adam(
             model.parameters(),
             lr=self.config.get('learning_rate', 1e-4),
@@ -173,19 +178,11 @@ class Trainer:
         )
         return optimizer, scheduler
 
-    def setup_training(self):
-        model = self.initialize_model()
-        criterion = CombinedLoss(
-            bce_weight=self.config.get('bce_weight', 0.5),
-            dice_weight=self.config.get('dice_weight', 0.5)
-        )
-        optimizer, scheduler = self.get_optimizer(model)
-        return model, criterion, optimizer, scheduler
-
     def save_metrics(self, save_dir):
+        """Plot and save learning curves"""
         plt.figure(figsize=(15, 5))
         
-        # Plot losses
+        # Plot loss curves
         plt.subplot(1, 2, 1)
         plt.plot(self.train_losses, label='Train Loss')
         plt.plot(self.val_losses, label='Val Loss')
@@ -194,7 +191,7 @@ class Trainer:
         plt.legend()
         plt.title('Learning Curves - Loss')
         
-        # Plot accuracies
+        # Plot accuracy curves
         plt.subplot(1, 2, 2)
         plt.plot(self.train_accuracies, label='Train Accuracy')
         plt.plot(self.val_accuracies, label='Val Accuracy')
@@ -207,91 +204,26 @@ class Trainer:
         plt.close()
 
     def train(self, train_loader, val_loader):
-        """Main training loop with metrics tracking"""
+        """Main training loop"""
         save_dir = Path('../training/checkpoints')
         save_dir.mkdir(exist_ok=True)
         
-        model, criterion, optimizer, scheduler = self.setup_training()
+        model, criterion, optimizer, scheduler = self.initialize_model(), CombinedLoss(), *self.get_optimizer(self.initialize_model())
         best_val_loss = float('inf')
         
         for epoch in range(self.config['start_epoch'], self.config['end_epoch']):
-            # Training phase
-            train_metrics = self.step(
-                train_loader, 
-                'train', 
-                epoch, 
-                model, 
-                criterion, 
-                optimizer
-            )
+            # Training step
+            train_metrics = self.step(train_loader, 'train', epoch, model, criterion, optimizer)
             
-            # Validation phase
+            # Validation step
             with torch.no_grad():
-                val_metrics = self.step(
-                    val_loader,
-                    'val',
-                    epoch,
-                    model,
-                    criterion
-                )
+                val_metrics = self.step(val_loader, 'val', epoch, model, criterion)
             
-            # Update learning rate
-            scheduler.step(val_metrics['loss'])
+            scheduler.step(val_metrics['loss'])  # Adjust learning rate
             
-            # Store metrics
-            self.train_losses.append(train_metrics['loss'])
-            self.val_losses.append(val_metrics['loss'])
-            self.train_accuracies.append(train_metrics['accuracy'])
-            self.val_accuracies.append(val_metrics['accuracy'])
-            
-            # Logging
-            print(
-                f"Epoch {epoch:03d}: "
-                f"Train Loss={train_metrics['loss']:.4f} "
-                f"[Train Acc={train_metrics['accuracy']:.2f}%] "
-                f"[Train Dice={train_metrics['dice']:.2f}] | "
-                f"Val Loss={val_metrics['loss']:.4f} "
-                f"[Val Acc={val_metrics['accuracy']:.2f}%] "
-                f"[Val Dice={val_metrics['dice']:.2f}]"
-            )
-            
-            # Save best model
+            # Save model if validation loss improves
             if val_metrics['loss'] < best_val_loss:
                 best_val_loss = val_metrics['loss']
-                checkpoint = {
-                    'epoch': epoch,
-                    'model_state_dict': model.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'scheduler_state_dict': scheduler.state_dict(),
-                    'train_loss': train_metrics['loss'],
-                    'val_loss': val_metrics['loss'],
-                    'train_acc': train_metrics['accuracy'],
-                    'val_acc': val_metrics['accuracy'],
-                    'config': self.config
-                }
-                
-                try:
-                    torch.save(checkpoint, save_dir / f'model_epoch_{epoch}_loss_{val_metrics["loss"]:.4f}.pth')
-                except Exception as e:
-                    print(f"Error saving checkpoint: {str(e)}")
+                torch.save(model.state_dict(), save_dir / f'model_best.pth')
         
-        # Save final results
-        final_checkpoint = {
-            'epoch': epoch,
-            'model_state_dict': model.state_dict(),
-            'train_losses': self.train_losses,
-            'val_losses': self.val_losses,
-            'train_accuracies': self.train_accuracies,
-            'val_accuracies': self.val_accuracies,
-            'best_val_loss': best_val_loss,
-            'config': self.config
-        }
-        
-        try:
-            torch.save(final_checkpoint, save_dir / 'final_model.pth')
-            self.save_metrics(save_dir)
-        except Exception as e:
-            print(f"Error saving final results: {str(e)}")
-        
-        return model, best_val_loss  
-    
+        return model, best_val_loss
